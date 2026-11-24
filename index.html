@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F4E78">
+<meta name="description" content="Informe de compras para actividades de obra civil a partir de archivos Excel, PDF o Word.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>Compras de Obra Civil</title>
+<style>
+  :root { --azul: #1F4E78; --azul-claro: #e8f0f8; --gris: #5b6770; --borde: #d6dde4; --ok: #1e7b3a; --error: #b42318; --aviso: #8a5a00; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: #f5f7fa; color: #1d2630; }
+  header { background: var(--azul); color: #fff; padding: 16px 20px; padding-top: max(16px, env(safe-area-inset-top)); display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 1.2rem; margin: 0; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+  section { background: #fff; border: 1px solid var(--borde); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; color: var(--azul); }
+  .zona { border: 2px dashed #9fb3c8; border-radius: 10px; padding: 26px 16px; text-align: center; background: var(--azul-claro); cursor: pointer; }
+  .zona.activa { border-color: var(--azul); background: #d6e6f5; }
+  .zona p { margin: 6px 0; color: var(--gris); }
+  .boton { background: var(--azul); color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font-size: 0.95rem; cursor: pointer; }
+  .boton:disabled { background: #9aa7b3; cursor: not-allowed; }
+  .boton.secundario { background: #fff; color: var(--azul); border: 1px solid var(--azul); }
+  .boton.pequeno { padding: 4px 10px; font-size: 0.85rem; }
+  .acciones { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .campos { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  label { display: block; font-size: 0.85rem; color: var(--gris); margin-bottom: 4px; }
+  input[type=text], input[type=number] { width: 100%; padding: 9px 10px; border: 1px solid var(--borde); border-radius: 6px; font-size: 0.95rem; }
+  .tabla-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--borde); vertical-align: top; }
+  th { background: var(--azul-claro); color: var(--azul); font-weight: 600; position: sticky; top: 0; }
+  td input.cant { width: 110px; }
+  tr.categoria td { background: #f0f4f8; font-weight: 700; color: var(--azul); }
+  ul.lista { margin: 6px 0 0; padding-left: 20px; font-size: 0.88rem; color: var(--gris); }
+  .mensaje { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 0.92rem; }
+  .mensaje.ok { background: #e6f4ea; color: var(--ok); }
+  .mensaje.error { background: #fdecea; color: var(--error); }
+  .mensaje.info { background: var(--azul-claro); color: var(--azul); }
+  .aviso { font-size: 0.82rem; color: var(--aviso); margin-top: 8px; }
+  footer { text-align: center; color: var(--gris); font-size: 0.8rem; padding: 12px; }
+  @media (max-width: 600px) { th, td { font-size: 0.82rem; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Compras de Obra Civil</h1>
+  <button id="btnInstalar" class="boton secundario" hidden>Instalar app</button>
+</header>
+
+<main>
+  <div id="mensaje" class="mensaje info" hidden></div>
+
+  <section>
+    <h2>1. Datos del informe</h2>
+    <div class="campos">
+      <div><label for="proyecto">Proyecto / obra</label><input id="proyecto" type="text" placeholder="Ej.: Bodega sector norte"></div>
+      <div><label for="responsable">Responsable</label><input id="responsable" type="text" placeholder="Nombre de quien elabora"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Adjuntar presupuesto o listado de actividades</h2>
+    <label id="zonaArchivos" class="zona" for="inputArchivos">
+      <strong>Toque aquí o arrastre los archivos</strong>
+      <p>Excel (.xlsx, .xls, .csv), PDF (.pdf) o Word (.docx)</p>
+      <p>Columnas esperadas: <em>codigo</em> (o nombre de la actividad) y <em>cantidad</em></p>
+    </label>
+    <input id="inputArchivos" type="file" accept=".xlsx,.xls,.xlsm,.csv,.pdf,.docx" multiple hidden>
+    <ul id="listaArchivos" class="lista"></ul>
+    <div class="acciones">
+      <button id="btnLimpiar" class="boton secundario pequeno" type="button">Limpiar todo</button>
+    </div>
+    <p class="aviso">Los archivos se leen en este dispositivo. No se envían a ningún servidor.</p>
+  </section>
+
+  <section id="seccionActividades" hidden>
+    <h2>3. Actividades detectadas (revise y ajuste cantidades)</h2>
+    <div class="tabla-wrap">
+      <table id="tablaActividades">
+        <thead><tr><th>Código</th><th>Actividad</th><th>Cantidad de obra</th><th>Unidad</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="acciones">
+      <button id="btnGenerar" class="boton" type="button" disabled>Generar informe de compras</button>
+    </div>
+  </section>
+
+  <section id="seccionObs" hidden>
+    <h2>Líneas no reconocidas</h2>
+    <p class="aviso">Estas líneas tienen números o texto que no coincide con la base de actividades. Revíselas: si corresponden a una actividad, agréguela manualmente en el archivo con el código correcto.</p>
+    <ul id="listaObs" class="lista"></ul>
+  </section>
+
+  <section id="seccionInforme" hidden>
+    <h2>4. Informe de compras</h2>
+    <div class="tabla-wrap">
+      <table id="tablaCompras">
+        <thead><tr><th>Material</th><th>Cantidad necesaria (incl. merma)</th><th>Presentación</th><th>Contenido</th><th>Unidades a comprar</th><th>Actividades</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="acciones">
+      <button id="btnPDF" class="boton" type="button">Descargar PDF</button>
+      <button id="btnExcel" class="boton secundario" type="button">Descargar Excel</button>
+    </div>
+    <p class="aviso">Cantidades calculadas con rendimientos de referencia. Validar con los APU de la obra antes de comprar.</p>
+  </section>
+</main>
+
+<footer>Procesamiento local · funciona sin conexión una vez instalada</footer>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/mammoth.browser.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/jspdf.plugin.autotable.min.js"></script>
+<script src="base.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
