@@ -1,7 +1,7 @@
 // Service worker: guarda la app para que funcione sin conexión.
-const VERSION = "compras-obra-v1";
+const VERSION = "compras-obra-v3";
 const ARCHIVOS = [
-  "./", "./index.html", "./app.js", "./base.js", "./manifest.webmanifest",
+  "./", "./index.html", "./app.js", "./base.js", "./base_acta6.js", "./base_acta6_auto.js", "./kits.js", "./nube.js", "./config.js", "./vendor/supabase.umd.js", "./manifest.webmanifest",
   "./icons/icon-192.png", "./icons/icon-512.png",
   "./vendor/xlsx.full.min.js", "./vendor/pdf.min.js", "./vendor/pdf.worker.min.js",
   "./vendor/mammoth.browser.min.js", "./vendor/jspdf.umd.min.js", "./vendor/jspdf.plugin.autotable.min.js"
@@ -19,6 +19,7 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
+  if (new URL(e.request.url).origin !== self.location.origin) return; // Supabase va directo a la red
   e.respondWith(
     caches.match(e.request).then((resp) => resp || fetch(e.request).then((r) => {
       const copia = r.clone();

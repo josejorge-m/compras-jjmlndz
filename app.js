@@ -1,5 +1,20 @@
 /* Calculadora de compras de obra civil. Todo se procesa en el dispositivo; ningún archivo sale de la app. */
 
+const BASE_ACTIVIDADES = [...BASE_ACTIVIDADES_BASE, ...BASE_ACTA_N6, ...BASE_ACTA_N6_AUTO];
+
+const _clon = (o) => JSON.parse(JSON.stringify(o));
+let KITS = _clon(KITS_BASE);   // se reemplaza con los kits de la nube al iniciar sesión
+let ES_ADMIN = false;
+
+async function guardarKits() {
+  try {
+    await NUBE.guardarKits(KITS);
+    mostrarMensaje("Kits guardados en la nube.", "ok");
+  } catch (err) {
+    mostrarMensaje("No se pudieron guardar los kits: " + err.message, "error");
+  }
+}
+
 const UNIDADES_DISCRETAS = new Set(["und", "unidad", "bulto", "varilla", "caja", "gal", "galon", "rollo", "bolsa", "lata"]);
 const $ = (id) => document.getElementById(id);
 
@@ -30,6 +45,13 @@ const fmt = (n, dec = 2) => Number(n).toLocaleString("es-CO", { minimumFractionD
 function redondearCompra(valor, unidad) {
   if (UNIDADES_DISCRETAS.has(String(unidad).trim().toLowerCase())) return Math.ceil(Number((valor).toFixed(6)));
   return Math.ceil(Number((valor * 100).toFixed(6))) / 100;
+}
+
+function detectarKits(nombre) {
+  const N = normalizar(nombre);
+  return KITS.filter((k) =>
+    (k.palabras || []).some((p) => N.includes(normalizar(p))) &&
+    !(k.excluir || []).some((e) => N.includes(normalizar(e))));
 }
 
 function mostrarMensaje(texto, tipo = "info") {
@@ -68,8 +90,12 @@ function extraerDeFilas(filas, fuente) {
 
     const idxAct = celdas.findIndex((c) => buscarActividad(c));
     if (idxAct < 0) {
+      // Ignora partidas con código y sin cantidad (avance 0) y filas de títulos sin valores
+      const primera = celdas.findIndex((c) => String(c).trim() !== "");
+      const esCodigo = (i) => i === primera && /^\s*\d+(\.\d+)?\s*$/.test(String(celdas[i]));
+      const valores = celdas.filter((c, i) => !esCodigo(i) && parseNumero(c) !== null && parseNumero(c) !== 0);
       const texto = celdas.filter((c) => String(c).trim()).join(" | ");
-      if (texto && celdas.some((c) => parseNumero(c) !== null)) {
+      if (texto && valores.length > 0) {
         lineasNoReconocidas.push({ fuente, texto });
       }
       continue;
@@ -84,7 +110,9 @@ function extraerDeFilas(filas, fuente) {
       for (let i = idxAct + 1; i < celdas.length && cantidad === null; i++) cantidad = parseNumero(celdas[i]);
       for (let i = idxAct - 1; i >= 0 && cantidad === null; i--) cantidad = parseNumero(celdas[i]);
     }
-    if (cantidad === null || cantidad <= 0) {
+    if (cantidad !== null) cantidad = Math.round(cantidad * 10000) / 10000;   // evita residuos de decimales
+    if (cantidad === 0) continue;   // partida del acta sin avance: no es un error
+    if (cantidad === null) {
       lineasNoReconocidas.push({ fuente, texto: celdas.filter((c) => String(c).trim()).join(" | ") + "  (sin cantidad válida)" });
       continue;
     }
@@ -97,7 +125,9 @@ function extraerDeFilas(filas, fuente) {
 async function leerExcel(archivo) {
   const wb = XLSX.read(await archivo.arrayBuffer(), { type: "array" });
   let filas = [];
-  for (const nombre of wb.SheetNames) {
+  const actas = wb.SheetNames.filter((n) => /^acta/i.test(n.trim()));
+  const hojas = actas.length ? actas : wb.SheetNames;
+  for (const nombre of hojas) {
     const hoja = XLSX.utils.sheet_to_json(wb.Sheets[nombre], { header: 1, defval: "", raw: true });
     filas = filas.concat(hoja);
   }
@@ -207,11 +237,21 @@ function renderActividades() {
     g.fuentes.add(h.fuente);
   });
   actividadesDetectadas = [...grupos.values()].map(({ fuentes, ...h }) => h);
+  // Cantidades netas negativas o cero (ajustes del acta) no generan compra: se informan y se quitan de la lista
+  actividadesDetectadas.filter((h) => !(h.cantidad > 0)).forEach((h) =>
+    lineasNoReconocidas.push({ fuente: "Ajuste neto", texto: `${h.codigo} ${h.nombre}: cantidad neta ${fmt(h.cantidad)} ${h.unidad} (no genera compra)` }));
+  actividadesDetectadas = actividadesDetectadas.filter((h) => h.cantidad > 0);
   actividadesDetectadas.forEach((h, i) => {
+    if (!h.kitsSel) h.kitsSel = detectarKits(h.nombre).map((k) => k.id);
+    const posibles = detectarKits(h.nombre);
+    const casillas = posibles.length
+      ? posibles.map((k) => `<label class="kit-op"><input type="checkbox" class="kit-chk" data-i="${i}" data-kit="${k.id}" ${h.kitsSel.includes(k.id) ? "checked" : ""}> ${k.nombre}</label>`).join("<br>")
+      : "<span class='aviso'>Sin kit</span>";
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${h.codigo}</td><td>${h.nombre}</td>
       <td><input type="number" step="any" min="0" value="${h.cantidad}" data-i="${i}" class="cant"></td>
       <td>${h.unidad}</td>
+      <td>${casillas}</td>
       <td><button type="button" class="quitar" data-i="${i}">Quitar</button></td>`;
     tbody.appendChild(tr);
   });
@@ -231,15 +271,30 @@ function renderActividades() {
 function calcularInforme() {
   const filas = [];
   const actividadesUsadas = [];
+  const sinCompra = [];
+  const nombresPartidas = actividadesDetectadas.map((a) => normalizar(a.nombre));
   for (const act of actividadesDetectadas) {
     const base = BASE_ACTIVIDADES.find((b) => b.codigo === act.codigo);
     if (!base || !(act.cantidad > 0)) continue;
     actividadesUsadas.push({ ...act });
+    const kitsAplicados = KITS.filter((k) => (act.kitsSel || []).includes(k.id));
+    if (base.materiales.length === 0 && kitsAplicados.length === 0) { sinCompra.push({ ...act }); continue; }
     for (const m of base.materiales) {
       const neta = act.cantidad * m.rendimiento;
       const conMerma = neta * (1 + m.merma);
       filas.push({ codigo: act.codigo, actividad: base.nombre, categoria: m.categoria, material: m.material,
         unidad: m.unidad, neta, conMerma, presentacion: m.presentacion, unidadCompra: m.unidadCompra, contenido: m.contenido });
+    }
+    for (const kit of kitsAplicados) {
+      for (const c of kit.componentes) {
+        // Componente que no aplica si la obra ya tiene una partida propia (ej.: grifería)
+        if ((c.omitirSi || []).some((p) => nombresPartidas.some((n) => n.includes(normalizar(p))))) continue;
+        const neta = act.cantidad * c.rendimiento;
+        const conMerma = neta * (1 + (c.merma || 0));
+        const uc = c.unidadCompra || c.unidad;
+        filas.push({ codigo: act.codigo, actividad: base.nombre, categoria: c.categoria || kit.disciplina, material: c.material,
+          unidad: c.unidad, neta, conMerma, presentacion: c.presentacion || c.material, unidadCompra: uc, contenido: c.contenido || 1 });
+      }
     }
   }
   // consolidar por material
@@ -256,7 +311,7 @@ function calcularInforme() {
     actividades: [...g.actividades].join(", ")
   })).sort((a, b) => a.categoria.localeCompare(b.categoria, "es") || a.material.localeCompare(b.material, "es"));
 
-  return { compras, actividades: actividadesUsadas, observaciones: lineasNoReconocidas.slice(), fecha: new Date() };
+  return { compras, actividades: actividadesUsadas, sinCompra, observaciones: lineasNoReconocidas.slice(), fecha: new Date() };
 }
 
 function renderInforme(inf) {
@@ -324,6 +379,15 @@ function exportarPDF(inf) {
     columnStyles: { 5: { fontStyle: "bold" } },
   });
 
+  if (inf.sinCompra.length) {
+    doc.autoTable({
+      startY: doc.lastAutoTable.finalY + 8,
+      head: [["Partidas que no generan compra (servicios)", "Cantidad de obra"]],
+      body: inf.sinCompra.map((a) => [a.nombre, `${fmt(a.cantidad)} ${a.unidad}`]),
+      styles: { fontSize: 8.5 }, headStyles: { fillColor: [90, 90, 90] },
+    });
+  }
+
   if (inf.observaciones.length) {
     doc.addPage();
     doc.setFont("helvetica", "bold").setFontSize(12).text("Observaciones de lectura (revisar manualmente)", 14, 16);
@@ -364,6 +428,235 @@ function exportarExcel(inf) {
   descargarBlob(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), nombreBase() + ".xlsx");
 }
 
+
+// ---------- Editor de kits ----------
+const ESC = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+const _lista = (t) => String(t || "").split(",").map((x) => x.trim()).filter(Boolean);
+
+function renderEditorKits() {
+  const cont = $("editorKits");
+  cont.innerHTML = "";
+  KITS.forEach((k) => {
+    const det = document.createElement("details");
+    det.dataset.kit = k.id;
+    det.innerHTML = `
+      <summary><strong>${ESC(k.nombre)}</strong> · ${ESC(k.disciplina)}</summary>
+      <div class="campos">
+        <div><label>Nombre del kit</label><input type="text" data-f="nombre" value="${ESC(k.nombre)}"></div>
+        <div><label>Disciplina</label><input type="text" data-f="disciplina" value="${ESC(k.disciplina)}"></div>
+        <div><label>Palabras clave (separadas por coma)</label><input type="text" data-f="palabras" value="${ESC((k.palabras || []).join(", "))}"></div>
+        <div><label>Excluir si contiene (separadas por coma)</label><input type="text" data-f="excluir" value="${ESC((k.excluir || []).join(", "))}"></div>
+      </div>
+      <div class="tabla-wrap"><table>
+        <thead><tr><th>Componente</th><th>Unidad</th><th>Cantidad por unidad de partida</th><th>Merma (%)</th><th></th></tr></thead>
+        <tbody>${(k.componentes || []).map((c, i) => `
+          <tr data-c="${i}">
+            <td><input type="text" data-f="material" value="${ESC(c.material)}"></td>
+            <td><input type="text" data-f="unidad" value="${ESC(c.unidad)}" style="width:80px"></td>
+            <td><input type="number" step="any" min="0" data-f="rendimiento" value="${c.rendimiento}" style="width:110px"></td>
+            <td><input type="number" step="any" min="0" data-f="merma" value="${(c.merma || 0) * 100}" style="width:80px"></td>
+            <td><button type="button" class="boton secundario pequeno" data-act="del-comp">Quitar</button></td>
+          </tr>`).join("")}
+        </tbody></table></div>
+      <div class="acciones">
+        <button type="button" class="boton secundario pequeno" data-act="add-comp" ${ES_ADMIN ? "" : "disabled"}>Añadir componente</button>
+        <button type="button" class="boton secundario pequeno" data-act="del-kit" ${ES_ADMIN ? "" : "disabled"}>Eliminar kit</button>
+      </div>`;
+    cont.appendChild(det);
+  });
+}
+
+function leerEditorKits() {
+  document.querySelectorAll("#editorKits details").forEach((det) => {
+    const k = KITS.find((x) => x.id === det.dataset.kit);
+    if (!k) return;
+    const campo = (f) => det.querySelector(`.campos [data-f="${f}"]`).value;
+    k.nombre = campo("nombre").trim() || k.nombre;
+    k.disciplina = campo("disciplina").trim() || "Otros";
+    k.palabras = _lista(campo("palabras"));
+    k.excluir = _lista(campo("excluir"));
+    k.componentes = [...det.querySelectorAll("tbody tr")].map((tr) => {
+      const f = (n) => tr.querySelector(`[data-f="${n}"]`).value;
+      const unidad = f("unidad").trim() || "und";
+      const uc = unidad.toLowerCase() === "un" ? "und" : unidad;
+      return { material: f("material").trim(), unidad, rendimiento: parseNumero(f("rendimiento")) || 0,
+        categoria: k.disciplina, presentacion: f("material").trim(), unidadCompra: uc, contenido: 1,
+        merma: (parseNumero(f("merma")) || 0) / 100 };
+    }).filter((c) => c.material);
+  });
+}
+
+function iniciarEditorKits() {
+  $("btnNuevoKit").addEventListener("click", () => {
+    leerEditorKits();
+    KITS.push({ id: "kit-" + Date.now(), disciplina: "Otros", nombre: "Nuevo kit", palabras: [], excluir: [], componentes: [] });
+    renderEditorKits();
+  });
+  $("btnGuardarKits").addEventListener("click", () => {
+    leerEditorKits(); guardarKits().then(() => { renderEditorKits(); renderActividades(); });
+  });
+  $("btnRestaurarKits").addEventListener("click", () => {
+    KITS = _clon(KITS_BASE); guardarKits().then(() => { renderEditorKits(); renderActividades(); });
+  });
+  $("btnExportarKits").addEventListener("click", () => {
+    leerEditorKits();
+    descargarBlob(new Blob([JSON.stringify(KITS, null, 2)], { type: "application/json" }), "kits_obra.json");
+  });
+  $("inputKits").addEventListener("change", async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const datos = JSON.parse(await f.text());
+      if (!Array.isArray(datos)) throw new Error("el archivo debe contener una lista de kits");
+      KITS = datos; guardarKits().then(() => { renderEditorKits(); renderActividades(); });
+    } catch (err) { mostrarMensaje("No se pudieron importar los kits: " + err.message, "error"); }
+    e.target.value = "";
+  });
+  $("editorKits").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]"); if (!btn) return;
+    const det = btn.closest("details");
+    const k = KITS.find((x) => x.id === det.dataset.kit);
+    leerEditorKits();
+    if (btn.dataset.act === "add-comp") k.componentes.push({ material: "Nuevo componente", unidad: "und", rendimiento: 1, categoria: k.disciplina, presentacion: "Nuevo componente", unidadCompra: "und", contenido: 1, merma: 0 });
+    if (btn.dataset.act === "del-comp") k.componentes.splice(Number(btn.closest("tr").dataset.c), 1);
+    if (btn.dataset.act === "del-kit") KITS = KITS.filter((x) => x.id !== k.id);
+    renderEditorKits();
+  });
+  renderEditorKits();
+}
+
+
+// ---------- Acceso, invitaciones y administración ----------
+const PENDIENTE_KEY = "invitacion_pendiente";
+
+function codigoInvitacion() {
+  return new URLSearchParams(location.search).get("invitacion") || localStorage.getItem(PENDIENTE_KEY) || null;
+}
+
+function mostrarLogin(msg = "", tipo = "info") {
+  $("contenidoApp").hidden = true;
+  $("seccionLogin").hidden = false;
+  $("btnSalir").hidden = true;
+  $("usuarioActual").textContent = "";
+  const m = $("mensajeLogin");
+  m.textContent = msg; m.className = "mensaje " + tipo; m.hidden = !msg;
+  const inv = codigoInvitacion();
+  $("btnCrearCuenta").hidden = !inv;
+  $("avisoInvitacion").hidden = !inv;
+}
+
+async function verificarSesion() {
+  const sesion = await NUBE.sesion();
+  if (!sesion) return mostrarLogin();
+  let perfil = await NUBE.perfil();
+  const cod = codigoInvitacion();
+  if (!perfil && cod) {
+    const ok = await NUBE.canjear(cod).catch(() => false);
+    localStorage.removeItem(PENDIENTE_KEY);
+    if (ok) perfil = await NUBE.perfil();
+  }
+  if (!perfil) {
+    await NUBE.salir();
+    return mostrarLogin("Su cuenta no tiene acceso. Pida una invitación al administrador.", "error");
+  }
+  await entrarApp(perfil);
+}
+
+async function entrarApp(perfil) {
+  ES_ADMIN = perfil.rol === "admin";
+  $("seccionLogin").hidden = true;
+  $("contenidoApp").hidden = false;
+  $("btnSalir").hidden = false;
+  $("usuarioActual").textContent = perfil.email + (ES_ADMIN ? " (administrador)" : "");
+  $("seccionAdmin").hidden = !ES_ADMIN;
+  $("inputKits").disabled = !ES_ADMIN;
+  $("btnNuevoKit").disabled = !ES_ADMIN;
+  $("btnGuardarKits").disabled = !ES_ADMIN;
+  $("btnRestaurarKits").disabled = !ES_ADMIN;
+  try {
+    const nube = await NUBE.cargarKits();
+    KITS = nube.length ? nube : _clon(KITS_BASE);
+  } catch (err) {
+    KITS = _clon(KITS_BASE);
+    mostrarMensaje("No se pudieron cargar los kits de la nube; se usan los predeterminados.", "error");
+  }
+  renderEditorKits();
+  renderActividades();
+  if (ES_ADMIN) cargarInvitaciones();
+}
+
+async function cargarInvitaciones() {
+  try {
+    const lista = await NUBE.listarInvitaciones();
+    const tb = $("tablaInvitaciones").querySelector("tbody");
+    tb.innerHTML = "";
+    lista.forEach((i) => {
+      const enlace = `${location.origin}${location.pathname}?invitacion=${i.codigo}`;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${ESC(i.email_destino || "(cualquiera)")}</td>
+        <td>${i.usada ? "Usada" : "Disponible"}</td>
+        <td>${new Date(i.creada_en).toLocaleDateString("es-CO")}</td>
+        <td>${i.usada ? "" : `<button type="button" class="boton secundario pequeno" data-enlace="${enlace}">Copiar enlace</button>`}</td>`;
+      tb.appendChild(tr);
+    });
+  } catch (err) {
+    mostrarMensaje("No se pudieron cargar las invitaciones: " + err.message, "error");
+  }
+}
+
+function copiarEnlace(enlace) {
+  navigator.clipboard.writeText(enlace)
+    .then(() => mostrarMensaje("Enlace copiado. Envíelo a la persona invitada.", "ok"))
+    .catch(() => mostrarMensaje("Copie este enlace: " + enlace, "info"));
+}
+
+function iniciarAcceso() {
+  if (!NUBE.configurado) {
+    mostrarLogin("La app todavía no está conectada a Supabase. Revise el archivo config.js.", "error");
+    return;
+  }
+  $("btnEntrar").addEventListener("click", async () => {
+    try {
+      await NUBE.entrar($("loginCorreo").value.trim(), $("loginClave").value);
+      await verificarSesion();
+    } catch (err) {
+      mostrarLogin("Correo o contraseña incorrectos, o la conexión falló. Intente de nuevo.", "error");
+    }
+  });
+  $("btnCrearCuenta").addEventListener("click", async () => {
+    const cod = codigoInvitacion();
+    if (!cod) return mostrarLogin("Necesita un enlace de invitación para crear la cuenta.", "error");
+    try {
+      const correo = $("loginCorreo").value.trim();
+      const clave = $("loginClave").value;
+      const conectada = await NUBE.crearCuenta(correo, clave);
+      localStorage.setItem(PENDIENTE_KEY, cod);
+      if (conectada) return await verificarSesion();
+      mostrarLogin("Revise su correo y confirme la cuenta. Luego ingrese aquí con su correo y contraseña.", "ok");
+    } catch (err) {
+      mostrarLogin("No se pudo crear la cuenta: " + err.message, "error");
+    }
+  });
+  $("btnSalir").addEventListener("click", async () => {
+    await NUBE.salir();
+    mostrarLogin("Sesión cerrada.", "ok");
+  });
+  $("btnCrearInvitacion").addEventListener("click", async () => {
+    try {
+      const cod = await NUBE.crearInvitacion($("correoInvitado").value.trim());
+      $("correoInvitado").value = "";
+      copiarEnlace(`${location.origin}${location.pathname}?invitacion=${cod}`);
+      cargarInvitaciones();
+    } catch (err) {
+      mostrarMensaje("No se pudo crear la invitación: " + err.message, "error");
+    }
+  });
+  $("tablaInvitaciones").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-enlace]");
+    if (b) copiarEnlace(b.dataset.enlace);
+  });
+  verificarSesion().catch((err) => mostrarLogin("Error de conexión: " + err.message, "error"));
+}
+
 // ---------- Eventos ----------
 function iniciar() {
   const zona = $("zonaArchivos");
@@ -378,6 +671,13 @@ function iniciar() {
     if (e.target.classList.contains("cant")) {
       const v = parseNumero(e.target.value);
       actividadesDetectadas[e.target.dataset.i].cantidad = v ?? 0;
+    }
+  });
+  $("tablaActividades").addEventListener("change", (e) => {
+    if (e.target.classList.contains("kit-chk")) {
+      const h = actividadesDetectadas[e.target.dataset.i];
+      const id = e.target.dataset.kit;
+      h.kitsSel = e.target.checked ? [...new Set([...(h.kitsSel || []), id])] : (h.kitsSel || []).filter((x) => x !== id);
     }
   });
   $("tablaActividades").addEventListener("click", (e) => {
@@ -420,7 +720,9 @@ function iniciar() {
   if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }
+  iniciarEditorKits();
   renderActividades();
+  iniciarAcceso();
 }
 
 if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";

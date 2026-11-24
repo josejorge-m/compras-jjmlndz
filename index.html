@@ -41,6 +41,7 @@
   .mensaje.error { background: #fdecea; color: var(--error); }
   .mensaje.info { background: var(--azul-claro); color: var(--azul); }
   .aviso { font-size: 0.82rem; color: var(--aviso); margin-top: 8px; }
+  .usuario { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; }
   footer { text-align: center; color: var(--gris); font-size: 0.8rem; padding: 12px; }
   @media (max-width: 600px) { th, td { font-size: 0.82rem; } }
 </style>
@@ -48,10 +49,29 @@
 <body>
 <header>
   <h1>Compras de Obra Civil</h1>
+  <div class="usuario">
+    <span id="usuarioActual"></span>
+    <button id="btnSalir" class="boton secundario pequeno" type="button" hidden>Salir</button>
+  </div>
   <button id="btnInstalar" class="boton secundario" hidden>Instalar app</button>
 </header>
 
 <main>
+  <section id="seccionLogin" hidden>
+    <h2>Ingreso</h2>
+    <div id="mensajeLogin" class="mensaje info" hidden></div>
+    <div class="campos">
+      <div><label for="loginCorreo">Correo</label><input id="loginCorreo" type="email" autocomplete="username"></div>
+      <div><label for="loginClave">Contraseña</label><input id="loginClave" type="password" autocomplete="current-password"></div>
+    </div>
+    <div class="acciones">
+      <button id="btnEntrar" class="boton" type="button">Entrar</button>
+      <button id="btnCrearCuenta" class="boton secundario" type="button" hidden>Crear mi cuenta</button>
+    </div>
+    <p id="avisoInvitacion" class="aviso" hidden>Está usando un enlace de invitación. Escriba el correo y la contraseña que desea usar y pulse «Crear mi cuenta».</p>
+  </section>
+
+  <div id="contenidoApp" hidden>
   <div id="mensaje" class="mensaje info" hidden></div>
 
   <section>
@@ -81,7 +101,7 @@
     <h2>3. Actividades detectadas (revise y ajuste cantidades)</h2>
     <div class="tabla-wrap">
       <table id="tablaActividades">
-        <thead><tr><th>Código</th><th>Actividad</th><th>Cantidad de obra</th><th>Unidad</th><th></th></tr></thead>
+        <thead><tr><th>Código</th><th>Actividad</th><th>Cantidad de obra</th><th>Unidad</th><th>Kits aplicados</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -94,6 +114,20 @@
     <h2>Líneas no reconocidas</h2>
     <p class="aviso">Estas líneas tienen números o texto que no coincide con la base de actividades. Revíselas: si corresponden a una actividad, agréguela manualmente en el archivo con el código correcto.</p>
     <ul id="listaObs" class="lista"></ul>
+  </section>
+
+  <section id="seccionKits">
+    <h2>Kits de componentes por disciplina</h2>
+    <p class="aviso">Cada kit agrega al listado los componentes que acompañan una partida (acoples, válvulas, cajas, cables, herrajes). Se aplica a las partidas que coinciden con sus palabras clave; en la tabla de actividades puede desmarcarlo. Los valores son de referencia: edítelos según el diseño de su obra.</p>
+    <div class="acciones">
+      <button id="btnNuevoKit" class="boton secundario pequeno" type="button">Nuevo kit</button>
+      <button id="btnGuardarKits" class="boton pequeno" type="button">Guardar cambios de kits</button>
+      <button id="btnRestaurarKits" class="boton secundario pequeno" type="button">Restaurar predeterminados</button>
+      <button id="btnExportarKits" class="boton secundario pequeno" type="button">Exportar kits</button>
+      <label class="boton secundario pequeno" for="inputKits">Importar kits</label>
+      <input id="inputKits" type="file" accept=".json,application/json" hidden>
+    </div>
+    <div id="editorKits"></div>
   </section>
 
   <section id="seccionInforme" hidden>
@@ -110,16 +144,37 @@
     </div>
     <p class="aviso">Cantidades calculadas con rendimientos de referencia. Validar con los APU de la obra antes de comprar.</p>
   </section>
+
+  <section id="seccionAdmin" hidden>
+    <h2>Administración: invitar usuarios</h2>
+    <div class="campos">
+      <div><label for="correoInvitado">Correo de la persona (opcional)</label><input id="correoInvitado" type="email"></div>
+    </div>
+    <div class="acciones"><button id="btnCrearInvitacion" class="boton" type="button">Crear invitación y copiar enlace</button></div>
+    <div class="tabla-wrap">
+      <table id="tablaInvitaciones">
+        <thead><tr><th>Correo</th><th>Estado</th><th>Creada</th><th>Enlace</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
 </main>
 
 <footer>Procesamiento local · funciona sin conexión una vez instalada</footer>
 
+<script src="vendor/supabase.umd.js"></script>
+<script src="config.js"></script>
+<script src="nube.js"></script>
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/mammoth.browser.min.js"></script>
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="vendor/jspdf.plugin.autotable.min.js"></script>
 <script src="base.js"></script>
+<script src="base_acta6.js"></script>
+<script src="base_acta6_auto.js"></script>
+<script src="kits.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

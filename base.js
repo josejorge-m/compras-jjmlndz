@@ -8,7 +8,7 @@
  *   categoria, presentacion (texto de compra), unidadCompra,
  *   contenido (cantidad del material por unidad de compra), merma (fracción, 0.05 = 5 %)
  */
-const BASE_ACTIVIDADES = [
+const BASE_ACTIVIDADES_BASE = [
   {
     codigo: "MURO01", nombre: "Muro en bloque No. 5 (e=12 cm)", unidad: "m2",
     materiales: [
